@@ -106,8 +106,8 @@ void BSP_USART_Config(void)
   LL_USART_ClearFlag_TC(DEBUG_USART);
 
   /**USART GPIO Configuration
-    PA2     ------> USART2_TX
-    PA3     ------> USART2_RX
+    PB6     ------> USART2_TX
+    PB7     ------> USART2_RX
     */
   DEBUG_USART_RX_GPIO_CLK_ENABLE();
   DEBUG_USART_TX_GPIO_CLK_ENABLE();

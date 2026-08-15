@@ -116,6 +116,7 @@ extern volatile unsigned char delay_25_6ms_fig;
 extern volatile unsigned char delay_51_2ms_fig; 
 extern volatile unsigned char delay_102_4ms_fig; 
 extern volatile unsigned char delay_512ms_fig; 
+extern volatile unsigned char delay_500ms_fig;
 
 
 
@@ -127,6 +128,7 @@ extern volatile unsigned char delay_25_6ms_cnt;
 extern volatile unsigned char delay_51_2ms_cnt;
 extern volatile unsigned char delay_102_4ms_cnt;
 extern volatile unsigned char delay_512ms_cnt;
+extern volatile unsigned short delay_500ms_cnt;
 
 //////////////////////////////////////
 

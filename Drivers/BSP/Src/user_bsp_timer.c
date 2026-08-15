@@ -182,7 +182,12 @@ void APP_UpdateCallback(void)
 
 	}
 
-
+	/* 500ms = 1250 x 400us. Keep this independent from the existing 512ms task chain. */
+	if (++delay_500ms_cnt >= 1250)
+	{
+		delay_500ms_cnt = 0x00;
+		delay_500ms_fig = 1;
+	}
 
 	/*USER END */
         

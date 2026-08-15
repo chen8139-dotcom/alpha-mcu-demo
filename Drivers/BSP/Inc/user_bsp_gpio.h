@@ -71,8 +71,8 @@
 
 
 
-#define LEDB_H       (GPIOA->BSRR = (1U << 4)) //关灯
-#define LEDB_L       (GPIOA->BSRR = (1U << (4 + 16)))   //开灯
+#define LEDB_H       (GPIOB->BSRR = (1U << 5)) //关灯，板载 LED2：PB5，低电平点亮
+#define LEDB_L       (GPIOB->BSRR = (1U << (5 + 16)))   //开灯，板载 LED2：PB5
 
 
 
@@ -89,7 +89,7 @@ void APP_GpioConfig_PF0(void);
 
 void APP_GpioConfig_PA1(void);
 
-void APP_GpioConfig_PA4(void);
+void APP_GpioConfig_PB5(void);
 
 
 void user_led_invert(void);

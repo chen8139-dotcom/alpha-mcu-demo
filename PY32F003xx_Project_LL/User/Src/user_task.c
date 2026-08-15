@@ -101,6 +101,12 @@ void Task_512ms(void)
 }
 
 
+void Task_500ms(void)
+{
+	user_led_invert();
+}
+
+
 
 
 

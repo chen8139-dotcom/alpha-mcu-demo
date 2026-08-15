@@ -43,6 +43,7 @@ volatile u8 delay_25_6ms_fig = 0;
 volatile u8 delay_51_2ms_fig = 0; 
 volatile u8 delay_102_4ms_fig = 0; 
 volatile u8 delay_512ms_fig = 0; 
+volatile u8 delay_500ms_fig = 0;
 
 
 
@@ -54,6 +55,7 @@ volatile u8 delay_25_6ms_cnt = 0;
 volatile u8 delay_51_2ms_cnt = 0;
 volatile u8 delay_102_4ms_cnt = 0;
 volatile u8 delay_512ms_cnt = 0;
+volatile u16 delay_500ms_cnt = 0;
 
 
 
@@ -396,7 +398,7 @@ void user_sys_init(void)
 
 
 	 /* user LED init */
-	 APP_GpioConfig_PA4();
+	 APP_GpioConfig_PB5();
 
 	 
 	

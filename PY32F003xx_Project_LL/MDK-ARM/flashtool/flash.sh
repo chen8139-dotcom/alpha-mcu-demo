@@ -58,6 +58,12 @@ print(f"hex -> bin: {len(buf)} 字节 (0x{min_a:08X}..0x{max_a:08X})")
 PYEOF
 
 # --- 生成烧录配置 ---------------------------------------------
+# 说明: PY32 的 DAP 在擦写期间会暂时失联, OpenOCD 日志里大量
+# "Failed to read memory" 是重试噪音, 且本 fork 的 OpenOCD 不打印
+# wrote/verified 也不返回错误码, 因此烧录成功与否以"回读比对"为准:
+# 烧完后 dump_image 导出芯片内容与本地 bin 逐字节 cmp。
+BIN_SIZE=$(stat -f%z "$BIN")
+VERIFY_BIN="/tmp/py32_flash_verify.bin"
 cat > "$CFG" <<EOF
 # OpenOCD 烧录: J-Link SWD + PY32F003x8 (64K flash)
 source [find interface/jlink.cfg]
@@ -71,11 +77,23 @@ init
 reset halt
 flash write_image erase $BIN 0x08000000 bin
 verify_image $BIN 0x08000000
+dump_image $VERIFY_BIN 0x08000000 $BIN_SIZE
 reset run
 shutdown
 EOF
 
 # --- 烧录 ------------------------------------------------------
 echo "==> 通过 J-Link (SN $SN) 烧录 PY32F003x8 ..."
-"$OCD" -s "$TCL_DIR" -f "$CFG"
-echo "==> 烧录完成"
+OCD_OUT=$("$OCD" -s "$TCL_DIR" -f "$CFG" 2>&1)
+RETRY_NOISE=$(printf '%s' "$OCD_OUT" | grep -c "Failed to read memory")
+printf '%s\n' "$OCD_OUT" | grep -v "Failed to read memory" | grep -v "SWD DPIDR" | grep -v "^Info : Listening" >&2
+
+# --- 回读校验: 芯片内容必须与 bin 逐字节一致 -------------------
+if cmp -s "$VERIFY_BIN" "$BIN"; then
+    echo "==> 烧录完成: 回读校验通过 ($BIN_SIZE 字节一致, DAP 重试噪音 ${RETRY_NOISE} 次)"
+    rm -f "$VERIFY_BIN"
+else
+    echo "错误: 回读校验失败, 芯片内容与 $BIN 不一致" >&2
+    cmp "$VERIFY_BIN" "$BIN" >&2 || true
+    exit 1
+fi

@@ -125,6 +125,7 @@ int main(void)
 		if (delay_12_8ms_fig)  { delay_12_8ms_fig = 0; Task_12_8ms(); }
 		if (delay_25_6ms_fig)  { delay_25_6ms_fig = 0; Task_25_6ms(); }
 		if (delay_512ms_fig)   { delay_512ms_fig = 0;  Task_512ms(); }
+		if (delay_500ms_fig)   { delay_500ms_fig = 0;  Task_500ms(); }
 	}
 }
 

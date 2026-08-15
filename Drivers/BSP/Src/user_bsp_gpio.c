@@ -294,16 +294,16 @@ void APP_GpioConfig_PA1(void)
 
 
 /* ***************************** */
-/* WS2812B LEDB IO Init  */
+/* 板载 LED2（PB5）IO Init  */
 /* ***************************** */
-void APP_GpioConfig_PA4(void)
+void APP_GpioConfig_PB5(void)
 {
 
 
-  /* Configure PA1 as output */
-  LL_GPIO_SetPinMode(GPIOA, LL_GPIO_PIN_4, LL_GPIO_MODE_OUTPUT);
-  LL_GPIO_SetPinOutputType(GPIOA, LL_GPIO_PIN_4, LL_GPIO_OUTPUT_PUSHPULL);
-  LL_GPIO_SetPinSpeed(GPIOA, LL_GPIO_PIN_4, LL_GPIO_SPEED_FREQ_LOW);
+  /* Configure PB5 as output */
+  LL_GPIO_SetPinMode(GPIOB, LL_GPIO_PIN_5, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinOutputType(GPIOB, LL_GPIO_PIN_5, LL_GPIO_OUTPUT_PUSHPULL);
+  LL_GPIO_SetPinSpeed(GPIOB, LL_GPIO_PIN_5, LL_GPIO_SPEED_FREQ_LOW);
 
 
   LEDB_H;

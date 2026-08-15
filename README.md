@@ -54,6 +54,8 @@ PY32F003xx_Project_LL/MDK-ARM/Project.uvprojx
 4. 通过 J-Link 下载并运行。
 5. 使用串口工具观察 UART2 调试输出；UART1 可连接蓝牙模组或串口工具进行协议测试。
 
+日志串口的完整配置、日志来源、开关和排查方法见 [`doc/LOGGING.md`](doc/LOGGING.md)。
+
 已有构建日志 `PY32F003xx_Project_LL/MDK-ARM/build_log.txt` 显示一次构建结果为：
 
 ```text
@@ -150,16 +152,15 @@ main.c / py32f0xx_it.c
 
 | 功能 | 开发板原理图 | 当前固件 | 适配状态 |
 | --- | --- | --- | --- |
-| 板载指示 LED | PB5（LED2） | PA4（`LEDB_H/LEDB_L`） | **存在差异**：当前 LED 宏不会直接驱动原理图中的 LED2 |
+| 板载指示 LED | PB5（LED2） | PB5（`LEDB_H/LEDB_L`），低电平点亮 | 匹配 |
 | UART1 TX/RX | PA2 / PA3，均由 P1 引出 | PA2 / PA3，115200 8N1 | 匹配 |
-| UART2 调试 TX | PA0，由 P1 引出 | PA0，115200 8N1 | 匹配，适合 `printf` 输出 |
-| UART2 调试 RX | 原理图未引出 PA8；TSSOP20 芯片管脚图也未列出 PA8 | 当前代码宏配置为 PA8 | **存在差异**：本工程应按 TX-only 调试使用，或后续重新选择实际可用 RX 引脚 |
+| UART2 调试 TX/RX | PB6 / PB7，均由 P2 引出 | PB6 / PB7，115200 8N1 | 匹配，适合 `printf` 输出和调试接收 |
 | 按键 | PA12 | PA12，低电平有效 | 匹配 |
 | WS2812B 数据 | 原理图未包含板载 WS2812B，PB6 仅在 P2 引出 | PB6 | 外接功能预留 |
 | WS2812B 供电控制 | 原理图未包含对应板载供电电路，PA1 在 P1 引出 | PA1 | 外接功能预留 |
 | 用户 Flash 页 | PY32F003F18P6 为 64 KB Flash | `0x0800FF80` 起始 | 地址位于 64 KB Flash 末页区域，仍需保留链接空间 |
 
-上表中的差异是当前开发板适配时最需要优先确认的事项。README 不把源码中的 PA4 LED 和 PA8 UART2 RX 描述为开发板已经验证的板载连接。
+当前 UART1 使用 PA2/PA3，UART2 调试使用 PB6/PB7，两个串口均连接到原理图引出的引脚。
 
 ### 4.4 固件使用的用户 Flash 区域
 
@@ -307,7 +308,7 @@ NVM_Write byte 0xED
 校验位：None
 ```
 
-连接 UART2 TX（PA0）后复位设备，检查是否能够看到 `hello PY32F003`、Flash Dump 和周期任务日志。
+连接 UART2 TX（PB6）后复位设备，检查是否能够看到 `hello PY32F003`、Flash Dump 和周期任务日志；如需验证 UART2 接收，将转换器 TX 连接到 PB7。
 
 ### 7.2 UART1 收发验证
 
@@ -345,9 +346,10 @@ NVM_Write byte 0xED
 
 ## 8. 已知限制与后续开发建议
 
-- 开发板原理图中的板载 LED2 接在 PB5，但当前 `LEDB_H/LEDB_L` 宏和 `APP_GpioConfig_PA4()` 使用 PA4；如果需要直接验证开发板上的绿色 LED，应先完成 LED 引脚适配，并确认低电平有效逻辑。
+- 开发板原理图中的板载 LED2 接在 PB5，当前 `LEDB_H/LEDB_L` 宏和 `APP_GpioConfig_PB5()` 已按低电平点亮逻辑直接驱动该引脚。
 - 当前工程 Target 为 `PY32F003x8`，实物芯片为 `PY32F003F18P6 TSSOP20`；两者的 DFP 设备选择和存储配置需要在正式发布前按精确料号复核。
-- 当前 UART2 调试代码把 RX 宏配置为 PA8，但该开发板 TSSOP20 原理图没有 PA8 引脚；当前建议只使用 PA0 调试输出，除非后续将 UART2 RX 重映射到实际可用引脚。
+- 当前 UART2 调试代码使用 PB6(TX)/PB7(RX)，均为 TSSOP20 原理图 P2 已引出的 USART2 AF4 复用引脚。
+- PB6 同时是 WS2812B 数据预留脚；当前未调用 `APP_GpioConfig_PB6()`，启用 WS2812B GPIO 输出后会与 UART2 TX 冲突。
 - 原理图没有板载 WS2812B 灯珠和对应供电电路，PB6/PA1 只能作为外接 WS2812B 功能的扩展引脚，不能据此判断开发板自带灯环。
 - `PY32F003xx_Project_LL/User/Src/user_ble_pair.c` 当前主要是协议说明和接口占位，完整 BLE 配网状态机、配网轮询、NetworkID 持久化和故障灯效尚未在该文件中完整实现。README 只描述当前已落地的 UART1 帧接收和 APP 开关灯处理。
 - `Drivers/BSP/Src/user_bsp_ws2812b.c` 中的 `ws2812b_Init()` 当前为空。工程中已经存在 WS2812B GPIO 宏和 29 颗灯的彩虹颜色表，但完整的灯珠时序发送与显示更新链路仍需继续实现。
