@@ -7,6 +7,7 @@
 # Keil MDK-ARM build outputs
 PY32F003xx_Project_LL/MDK-ARM/Objects/
 PY32F003xx_Project_LL/MDK-ARM/Listings/
+PY32F003xx_Project_LL/MDK-ARM/bin/
 PY32F003xx_Project_LL/MDK-ARM/*.uvguix*
 PY32F003xx_Project_LL/MDK-ARM/*.dep
 PY32F003xx_Project_LL/MDK-ARM/*.build_log.htm
