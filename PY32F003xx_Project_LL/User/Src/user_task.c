@@ -92,18 +92,15 @@ void Task_25_6ms(void)
 
 void Task_512ms(void)
 {
-
-
+#if DEF_Develop_Release && APP_TASK_512MS_WOS_LOG
 	printf("track_xx Task_512ms is running...\n");
-
-
-
+#endif
 }
 
 
 void Task_500ms(void)
 {
-	user_led_invert();
+	/* LED presentation is owned by the Beacon Mesh state machine. */
 }
 
 

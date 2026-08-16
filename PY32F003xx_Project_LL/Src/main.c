@@ -69,6 +69,7 @@ int main(void)
 
 
 	user_sys_init();
+	APP_BleMeshInit();
 
 	
 
@@ -92,26 +93,6 @@ int main(void)
 
 
 
-
-
-
-#if USER_LED_TEST
-
-	LEDB_L;
-	Delay_ms(1);
-
-	LEDB_H;
-	Delay_ms(1);
-
-	LEDB_L;
-	Delay_ms(1);
-
-	LEDB_H;
-	Delay_ms(1);
-
-
-#endif
-	
 
 
 

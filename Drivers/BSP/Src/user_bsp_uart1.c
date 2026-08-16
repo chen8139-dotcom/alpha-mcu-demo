@@ -93,7 +93,7 @@ extern unsigned char  g_Usart1FrameBuf[USART1_RXBUFF_SIZE];
 
 
 
-extern void print_hex_array(const unsigned char *buf, unsigned short len);
+/* UART1 receive ISR must not perform logging or blocking TX. */
 
 
 
@@ -305,7 +305,8 @@ static void APP_UsartRxIdleCallback(USART_TypeDef *USARTx)
 
   if (frame_len > 0U)
   {
-    //if (g_Usart1FrameReady == 0U)
+    /* The ISR only latches the frame. Parsing, TX and logging stay in main. */
+    if (g_Usart1FrameReady == 0U)
     {
       memcpy((void *)g_Usart1FrameBuf, (const void *)g_Usart1RxDmaBuf, frame_len);
 
@@ -314,8 +315,6 @@ static void APP_UsartRxIdleCallback(USART_TypeDef *USARTx)
 
 
 
-	  APP_UsartTransmit(USARTx, (const uint8_t *)g_Usart1FrameBuf, frame_len);
-	  print_hex_array((const uint8_t *)g_Usart1FrameBuf, frame_len);
 
 
 

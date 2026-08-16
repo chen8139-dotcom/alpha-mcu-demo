@@ -33,7 +33,7 @@
 #define NVM_DEMO_TEST            1 // 0
 
 
-#define USER_LED_TEST            1 // 0
+#define USER_LED_TEST            0 // LED is managed by the Beacon Mesh state machine
 
 
 #endif /* __USER_BOARD_CFG_H */

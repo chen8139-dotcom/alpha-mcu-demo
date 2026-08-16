@@ -40,6 +40,8 @@ track_xx user_sys_init_1_1...
 hello PY32F003
 ```
 
+板载 LED（PB5）不会再执行独立的 1ms 启动翻转。LED 由 Beacon Mesh 状态机统一管理：上电前 3 秒每 500ms 翻转，之后 Leader 常亮、Follower 仅在有效 Leader 心跳时亮 100ms，未连接模组和 Candidate 状态灭灯。
+
 由于 `NVM_DEMO_TEST=1`，启动阶段还会输出用户 Flash Dump、读写结果等较多内容。
 进入主循环后，`Task_512ms()` 当前会持续输出周期日志。
 
@@ -102,7 +104,7 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 | `APP_VERBOSE_UART1_RX` | `1U` | UART1 原始接收帧十六进制日志 | 生效 |
 | `APP_TASK_512MS_WOS_LOG` | `0U` | 预留的 512 ms WOS 日志开关 | 当前 `Task_512ms()` 日志未使用此宏 |
 | `NVM_DEMO_TEST` | `1` | 启动时执行 Flash Dump/读写演示 | 生效，会产生大量启动日志 |
-| `USER_LED_TEST` | `1` | 启动时执行 LED 翻转测试 | 不直接产生日志 |
+| `USER_LED_TEST` | `0` | 独立 LED 启动翻转测试 | 已关闭；LED 由 Beacon Mesh 状态机管理 |
 
 主要配置文件：
 
@@ -150,7 +152,29 @@ UART1 通过 DMA 接收并由 IDLE 中断切帧，应用层在主循环中处理
 
 来源：`PY32F003xx_Project_LL/User/Src/user_ble_uart.c`。
 
-### 5.4 按键和业务日志
+### 5.4 Beacon Mesh 状态与遥控器日志
+
+UART1 协议层在主循环中输出以下业务日志：
+
+```text
+[BLE] module ready
+[BLE] MAC/ElectionID=1A 09 E2 49 8F 34
+[MESH] INIT -> FOLLOWER reason=MAC_READY
+[MESH] FOLLOWER -> CANDIDATE reason=LEADER_TIMEOUT
+[MESH] CANDIDATE -> LEADER reason=CANDIDATE_DELAY
+[MESH] TX LEADER_ADV seq=1 network=0x1234 flags=0x00
+[REMOTE] source=遥控器 addr=0x1115 cmd=0x0A type=短按 para=0x00 rand=0x00 check=OK
+```
+
+业务日志由 `APP_BLE_DEBUG_LOG` 控制，原始 UART1 十六进制日志由
+`APP_VERBOSE_UART1_RX` 控制。当前固定 `NetworkID=0x1234`，收到 `Cmd=0xFF`
+只记录“configuration ignored”，不会修改或写入 NetworkID。
+
+UART1 中断只负责锁存 DMA 帧，不执行 `printf()` 或阻塞式发送。来源：
+`PY32F003xx_Project_LL/User/Src/user_ble_uart.c` 和
+`Drivers/BSP/Src/user_bsp_uart1.c`。
+
+### 5.5 按键和业务日志
 
 研发模式 `DEF_Develop_Release=1` 时：
 
@@ -163,19 +187,17 @@ UART1 通过 DMA 接收并由 IDLE 中断切帧，应用层在主循环中处理
 - `PY32F003xx_Project_LL/User/Src/user_task.c`
 - `PY32F003xx_Project_LL/User/Src/user_ble_uart.c`
 
-### 5.5 周期任务日志
+### 5.6 周期任务日志
 
-`Task_512ms()` 当前无条件输出：
+`Task_512ms()` 由 `APP_TASK_512MS_WOS_LOG` 控制，默认值为 `0U`。开启后输出：
 
 ```text
 track_xx Task_512ms is running...
 ```
 
-该日志约每 512 ms 输出一次。虽然工程定义了 `APP_TASK_512MS_WOS_LOG`，但当前这条
-日志没有使用该宏，因此将宏改为 `0U` 不会关闭它。若后续需要控制这条日志，应先修改
-代码，再同步更新本文档。
+该日志约每 512 ms 输出一次。
 
-### 5.6 时间同步辅助日志
+### 5.7 时间同步辅助日志
 
 `APP_SyncLogWosTicks()` 可以输出 WOS tick、十六进制 tick 和运行时间，受
 `DEF_Develop_Release && APP_BLE_DEBUG_LOG` 控制。它是辅助接口，当前是否产生输出取决于
