@@ -30,7 +30,7 @@
 
 
 
-#define NVM_DEMO_TEST            1 // 0
+#define NVM_DEMO_TEST            0 // 1: 上电演示 Flash 读写一次并 dump 整页; 0: 关闭
 
 
 #define USER_LED_TEST            0 // LED is managed by the Beacon Mesh state machine
