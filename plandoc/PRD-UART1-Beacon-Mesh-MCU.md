@@ -30,9 +30,6 @@
 
 ## 2. 协议依据
 
-- UART 帧协议：`doc/alpha-stake-light/Beacon Mesh 模组十六进制串口协议.md`
-- Beacon 状态机：`doc/alpha-stake-light/插地灯 Beacon Mesh 组网与角色状态机说明.md`
-- 遥控器协议：`doc/alpha-stake-light/广云标准遥控器广播协议.md`
 - PC 协议编码：`serial-simulator/src/protocols/uartFrame.ts`、`beacon.ts`、`remote.ts`
 - PC 状态机：`serial-simulator/src-tauri/src/runtime.rs`
 
