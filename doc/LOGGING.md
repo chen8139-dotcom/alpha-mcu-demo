@@ -42,7 +42,7 @@ hello PY32F003
 
 板载 LED（PB5）不会再执行独立的 1ms 启动翻转。LED 由 Beacon Mesh 状态机统一管理：上电前 3 秒每 500ms 翻转，之后 Leader 常亮、Follower 仅在有效 Leader 心跳时亮 100ms，未连接模组和 Candidate 状态灭灯。
 
-由于 `NVM_DEMO_TEST=1`，启动阶段还会输出用户 Flash Dump、读写结果等较多内容。
+当前 `NVM_DEMO_TEST=0`，启动阶段默认不执行用户 Flash Dump/读写演示，避免阻塞式日志干扰 UART1 握手。
 进入主循环后，`Task_512ms()` 当前会持续输出周期日志。
 
 ## 2. 串口资源分工
@@ -103,7 +103,7 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 | `APP_BLE_DEBUG_LOG` | `1U` | BLE/业务日志开关 | 生效 |
 | `APP_VERBOSE_UART1_RX` | `1U` | UART1 原始接收帧十六进制日志 | 生效 |
 | `APP_TASK_512MS_WOS_LOG` | `0U` | 预留的 512 ms WOS 日志开关 | 当前 `Task_512ms()` 日志未使用此宏 |
-| `NVM_DEMO_TEST` | `1` | 启动时执行 Flash Dump/读写演示 | 生效，会产生大量启动日志 |
+| `NVM_DEMO_TEST` | `0` | 启动时执行 Flash Dump/读写演示 | 默认关闭；需要时手动开启 |
 | `USER_LED_TEST` | `0` | 独立 LED 启动翻转测试 | 已关闭；LED 由 Beacon Mesh 状态机管理 |
 
 主要配置文件：
@@ -135,8 +135,7 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 
 来源：`PY32F003xx_Project_LL/User/Src/user_flash_manage.c`。
 
-该演示会产生较多阻塞式日志，并且会执行 Flash 写操作。长期运行或正式固件中应根据
-需要关闭 `NVM_DEMO_TEST`。
+该演示会产生较多阻塞式日志，并且会执行 Flash 写操作。当前默认已关闭；长期运行或正式固件中应保持 `NVM_DEMO_TEST=0`。
 
 ### 5.3 UART1 接收日志
 
@@ -149,6 +148,19 @@ UART1 通过 DMA 接收并由 IDLE 中断切帧，应用层在主循环中处理
 
 以及接收到的十六进制字节。帧异常、帧头重定位、帧尾缺失、校验错误和未知命令等
 情况还会输出对应的 `[UART1 RX]` 或 `[BLE]` 日志。
+
+未收到模组 `0x20` 时，MCU 会在 UART1 初始化后每 500ms 输出一次：
+
+```text
+[BLE] startup MAC query fallback
+[BLE] TX MAC query 0x71
+```
+
+收到合法 MAC 但此前未收到 `0x20` 时，还会输出：
+
+```text
+[BLE] module ready inferred from MAC response
+```
 
 来源：`PY32F003xx_Project_LL/User/Src/user_ble_uart.c`。
 

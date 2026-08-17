@@ -45,7 +45,7 @@
 #define APP_TICKS_1000MS             2500UL
 #define APP_TICKS_2000MS             5000UL
 #define APP_TICKS_POWER_ON_LED       7500UL
-#define APP_TICKS_QUERY_RETRY        12500UL
+#define APP_TICKS_MODULE_QUERY_RETRY 1250UL
 
 static const uint8_t g_remote_cid[4] = {0x03U, 0x09U, 0x4CU, 0x5AU};
 
@@ -97,6 +97,7 @@ typedef struct
 	uint32_t last_sync;
 	uint32_t last_uart_tx;
 	uint32_t last_mac_query;
+	uint32_t handshake_started;
 	uint32_t led_start;
 	uint32_t heartbeat_led_start;
 	uint8_t heartbeat_led_active;
@@ -626,8 +627,23 @@ static void APP_BleMeshTick(void)
 
 	if (g_mesh.mac_ready == 0U)
 	{
-		if ((g_mesh.module_ready != 0U) && (g_mesh.mac_query_sent != 0U) &&
-		    (APP_BleElapsed(now, g_mesh.last_mac_query, APP_TICKS_QUERY_RETRY) != 0U))
+		if (g_mesh.mac_query_sent == 0U)
+		{
+			if ((g_mesh.module_ready != 0U) ||
+			    (APP_BleElapsed(now, g_mesh.handshake_started,
+			                    APP_TICKS_MODULE_QUERY_RETRY) != 0U))
+			{
+#if DEF_Develop_Release && APP_BLE_DEBUG_LOG
+				if (g_mesh.module_ready == 0U)
+				{
+					printf("[BLE] startup MAC query fallback\r\n");
+				}
+#endif
+				APP_BleSendMacQuery();
+			}
+		}
+		else if (APP_BleElapsed(now, g_mesh.last_mac_query,
+		                       APP_TICKS_MODULE_QUERY_RETRY) != 0U)
 		{
 			APP_BleSendMacQuery();
 		}
@@ -682,6 +698,8 @@ void APP_BleMeshInit(void)
 	g_mesh.role = MESH_ROLE_INIT;
 	g_mesh.led_start = wos;
 	LEDB_H;
+	g_mesh.handshake_started = wos;
+	g_mesh.last_mac_query = wos;
 	g_mesh.last_leader_seen = wos;
 	g_mesh.last_uart_tx = wos - APP_TICKS_200MS;
 #if DEF_Develop_Release && APP_BLE_DEBUG_LOG
@@ -725,7 +743,8 @@ void APP_HandleBleUartFrame(void)
 				printf("[BLE] module ready\r\n");
 #endif
 				if ((g_mesh.mac_query_sent == 0U) ||
-				    (APP_BleElapsed(wos, g_mesh.last_mac_query, APP_TICKS_QUERY_RETRY) != 0U))
+				    (APP_BleElapsed(wos, g_mesh.last_mac_query,
+				                    APP_TICKS_MODULE_QUERY_RETRY) != 0U))
 				{
 					APP_BleSendMacQuery();
 				}
@@ -734,11 +753,21 @@ void APP_HandleBleUartFrame(void)
 			{
 				if (APP_IsZeroId(payload) == 0U)
 				{
+					uint8_t inferred_module_ready =
+						(g_mesh.module_ready == 0U) ? 1U : 0U;
+
 					memcpy(g_mesh.election_id, payload, 6U);
 					g_mesh.mac_ready = 1U;
+					g_mesh.module_ready = 1U;
 					g_mesh.mac_query_sent = 0U;
 					g_mesh.last_leader_seen = wos;
 					APP_LogId("[BLE] MAC/ElectionID=", g_mesh.election_id);
+					if (inferred_module_ready != 0U)
+					{
+#if DEF_Develop_Release && APP_BLE_DEBUG_LOG
+						printf("[BLE] module ready inferred from MAC response\r\n");
+#endif
+					}
 					APP_MeshSetRole(MESH_ROLE_FOLLOWER, "MAC_READY");
 				}
 				else

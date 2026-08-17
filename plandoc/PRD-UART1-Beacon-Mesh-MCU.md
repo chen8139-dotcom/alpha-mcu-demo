@@ -71,6 +71,18 @@ MCU -> 模组：55 AA CMD LEN_H LEN_L PAYLOAD CHECK FE
 
 只有收到合法且非全零的 6B MAC 后，MCU 才允许参与选举和发送 Beacon。
 
+### 上电握手恢复
+
+`0x20` 可能早于 MCU UART1 初始化发送且只发送一次，因此 MCU 不依赖该通知才能完成握手。UART1 初始化后，MCU 在未获得 MAC 时每 500ms 主动发送一次：
+
+```text
+55 AA 71 00 00 70 FE
+```
+
+收到合法 `0x20` 时立即查询 MAC，但与主动查询共享 500ms 节流。收到合法、非全零 6B MAC 后，MCU 将 `module_ready` 和 `mac_ready` 同时置位，停止 `0x71` 重试，并进入 `FOLLOWER`。因此模组先上电、MCU 后复位时无需重新给模组断电。
+
+若未连接模组，MCU 只保留 500ms 查询重试，不参与选举、不发送 Beacon；启动 LED 展示结束后保持熄灭。
+
 ## 4. 固定网络身份
 
 ```text
@@ -232,6 +244,8 @@ UART1 中断不调用 `printf()`，不调用阻塞式 `APP_UsartTransmit()`。
 ### 协议与日志
 
 - [ ] UART `0x20` 后能发送 `0x71`。
+- [ ] 未收到 `0x20` 时，MCU 每 500ms 主动查询 `0x71`。
+- [ ] 仅收到合法 MAC 时也能确认模组就绪并停止查询重试。
 - [ ] 合法 MAC 进入 Follower；MAC 缺失或全零不选举。
 - [ ] `0x91` 遥控器三种来源和四种 CmdType 能输出可读名称。
 - [ ] 遥控器非法 CID/XOR/版本/来源不会进入业务处理。
