@@ -186,6 +186,24 @@ static uint32_t APP_MeshNowMs(void)
 }
 #endif
 
+/*
+ * Mesh timestamps are stored as uint32_t wos ticks.  Keep subtraction
+ * wrap-safe, but reject a genuinely stale sample instead of allowing an
+ * unsigned underflow to become a huge diagnostic delay.
+ */
+static uint32_t APP_MeshTicksToMs(uint32_t ticks)
+{
+	return (uint32_t)(((uint64_t)ticks * (uint64_t)USER_WOS_TICK_US) / 1000ULL);
+}
+
+static uint32_t APP_MeshNonNegativeDeltaMs(uint32_t now, uint32_t since)
+{
+	int32_t delta = (int32_t)(now - since);
+
+	if (delta < 0) return 0U;
+	return APP_MeshTicksToMs((uint32_t)delta);
+}
+
 static uint8_t APP_MeshElapsed(uint32_t now, uint32_t since, uint32_t period)
 {
 	return ((uint32_t)(now - since) >= period) ? 1U : 0U;
@@ -642,6 +660,9 @@ static void APP_MeshProcessRelay(uint32_t now)
 	mesh_beacon_key_t key;
 	app_mesh_beacon_t beacon;
 
+	/* UART2 trace output in the caller may have made its timestamp stale. */
+	now = wos;
+
 	for (i = 0U; i < APP_MESH_RELAY_CAPACITY; i++)
 	{
 		if (g_mesh.relay[i].active == 0U) continue;
@@ -865,6 +886,10 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 	int8_t selected;
 	mesh_tx_item_t *item;
 	uint32_t actual;
+	uint32_t queued_delay_ms;
+
+	/* Always schedule against the current tick, not APP_MeshTick's old sample. */
+	now = wos;
 
 	if (g_mesh.module_ready == 0U) return;
 	selected = APP_MeshSelectTx(now);
@@ -895,6 +920,7 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 	}
 	if (item->type == MESH_TX_RELAY)
 	{
+		queued_delay_ms = APP_MeshNonNegativeDeltaMs(now, item->created_at);
 		if (item->has_remote_key != 0U)
 		{
 			APP_MESH_TRACE("RELAY", "SEND kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X flags=0x%02X queued_delay_ms=%lu",
@@ -904,7 +930,7 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 			               (unsigned int)item->remote_key.cmd_type,
 			               (unsigned int)item->remote_key.para,
 			               (unsigned int)item->beacon[4],
-			               (unsigned long)((uint64_t)(now - item->created_at) * USER_WOS_TICK_US / 1000ULL));
+			               (unsigned long)queued_delay_ms);
 		}
 		else
 		{
@@ -913,7 +939,7 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 			               (unsigned int)item->beacon_key.seq,
 			               (unsigned int)item->beacon_key.cmd,
 			               (unsigned int)item->beacon[4],
-			               (unsigned long)((uint64_t)(now - item->created_at) * USER_WOS_TICK_US / 1000ULL));
+			               (unsigned long)queued_delay_ms);
 		}
 	}
 	APP_MeshSendFrame(APP_UART_CMD_BEACON_TX, item->beacon, APP_BEACON_LENGTH);
@@ -922,9 +948,9 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 	item->state = MESH_TX_SENT;
 	APP_MESH_TRACE("TXQ", "SEND type=%s seq=%u queued_ms=%lu actual_ms=%lu delay_ms=%lu result=OK",
 	               APP_MeshTxName(item->type), (unsigned int)item->beacon[2],
-	               (unsigned long)((uint64_t)item->created_at * USER_WOS_TICK_US / 1000ULL),
-	               (unsigned long)((uint64_t)actual * USER_WOS_TICK_US / 1000ULL),
-	               (unsigned long)((uint64_t)(actual - item->created_at) * USER_WOS_TICK_US / 1000ULL));
+	               (unsigned long)APP_MeshTicksToMs(item->created_at),
+	               (unsigned long)APP_MeshTicksToMs(actual),
+	               (unsigned long)APP_MeshNonNegativeDeltaMs(actual, item->created_at));
 	item->active = 0U;
 }
 

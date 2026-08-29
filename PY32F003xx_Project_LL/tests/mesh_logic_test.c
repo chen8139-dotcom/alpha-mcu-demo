@@ -1,9 +1,23 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "user_ble_mesh_logic.h"
+
+static uint32_t test_ticks_to_ms(uint32_t ticks)
+{
+	return (uint32_t)(((uint64_t)ticks * 400ULL) / 1000ULL);
+}
+
+static uint32_t test_non_negative_delta_ms(uint32_t now, uint32_t since)
+{
+	int32_t delta = (int32_t)(now - since);
+
+	if (delta < 0) return 0U;
+	return test_ticks_to_ms((uint32_t)delta);
+}
 
 static void test_beacon_round_trip(void)
 {
@@ -128,6 +142,24 @@ static void test_state_timing_and_resign(void)
 	assert(memcmp(leader_a, leader_b, sizeof(leader_a)) != 0); /* mismatch */
 }
 
+static void test_queue_delay_time_math(void)
+{
+	uint32_t since = 100U;
+
+	/* Normal queue wait: 50 ticks at 400 us/tick is 20 ms. */
+	assert(test_non_negative_delta_ms(150U, since) == 20U);
+	assert(test_non_negative_delta_ms(150U, since) <= 400U);
+
+	/* A stale caller timestamp must not turn into a multi-day delay. */
+	assert(test_non_negative_delta_ms(90U, since) == 0U);
+	assert(test_non_negative_delta_ms(90U, since) < 1000U);
+
+	/* Natural uint32_t tick wrap remains valid for a short elapsed interval. */
+	since = UINT32_MAX - 10U;
+	assert(test_non_negative_delta_ms(20U, since) == 12U); /* 31 ticks */
+	assert(test_non_negative_delta_ms(20U, since) < 1000U);
+}
+
 static void test_remote_relay_encoding(void)
 {
 	app_mesh_remote_key_t remote;
@@ -165,6 +197,7 @@ int main(void)
 	test_remote_relay_encoding();
 	test_scheduler_contract();
 	test_state_timing_and_resign();
+	test_queue_delay_time_math();
 	puts("mesh_logic_test: PASS");
 	return 0;
 }
