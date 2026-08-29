@@ -102,6 +102,7 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 | `DEF_Develop_Release` | `1` | 研发/发行阶段条件日志 | 生效 |
 | `APP_BLE_DEBUG_LOG` | `1U` | BLE/业务日志开关 | 生效 |
 | `APP_VERBOSE_UART1_RX` | `1U` | UART1 原始接收帧十六进制日志 | 生效 |
+| `APP_MESH_TRACE_LOG` | `1U` | 第二迭代 Mesh 队列、Relay、去重和时序追踪 | 生效 |
 | `APP_TASK_512MS_WOS_LOG` | `0U` | 预留的 512 ms WOS 日志开关 | 当前 `Task_512ms()` 日志未使用此宏 |
 | `NVM_DEMO_TEST` | `0` | 启动时执行 Flash Dump/读写演示 | 默认关闭；需要时手动开启 |
 | `USER_LED_TEST` | `0` | 独立 LED 启动翻转测试 | 已关闭；LED 由 Beacon Mesh 状态机管理 |
@@ -181,6 +182,17 @@ UART1 协议层在主循环中输出以下业务日志：
 业务日志由 `APP_BLE_DEBUG_LOG` 控制，原始 UART1 十六进制日志由
 `APP_VERBOSE_UART1_RX` 控制。当前固定 `NetworkID=0x1234`，收到 `Cmd=0xFF`
 只记录“configuration ignored”，不会修改或写入 NetworkID。
+
+第二迭代新增的 Mesh 追踪日志由 `APP_MESH_TRACE_LOG` 独立控制，默认开启，格式为：
+
+```text
+T=000001 [MESH] CONFIG network=0x1234 adv_ms=1000 sync_ms=1000 phase_ms=500 uart_min_ms=200 hold_ms=400 relay_ms=20..80 timeout_ms=3000 candidate_ms=300+(ElectionID[5]%200) dedup_capacity=32 dedup_ttl_ms=1000
+T=000700 [TXQ] SEND type=LEADER_ADV seq=1 queued_ms=0 actual_ms=700 delay_ms=700 result=OK
+```
+
+新增日志只在主循环或任务上下文输出，不在 UART1、DMA、定时器或 GPIO 中断中调用
+`printf()`。高频重复 Beacon 和遥控器事件按去重键限频，避免阻塞式 UART2 日志影响
+UART1 的 200ms 最小发送间隔。
 
 UART1 中断只负责锁存 DMA 帧，不执行 `printf()` 或阻塞式发送。来源：
 `PY32F003xx_Project_LL/User/Src/user_ble_uart.c` 和

@@ -31,6 +31,9 @@
 #ifndef APP_TASK_512MS_WOS_LOG
 #define APP_TASK_512MS_WOS_LOG   0U  /* 1: Task_512ms 每 512ms 打印 wos tick；0: 关闭 */
 #endif
+#ifndef APP_MESH_TRACE_LOG
+#define APP_MESH_TRACE_LOG        1U  /* 第二迭代 Mesh 队列/Relay/去重/时序追踪日志 */
+#endif
 
 
 
@@ -211,12 +214,14 @@ extern u8 user_boot_flag;
 ////////////////////////////////////////////////
 
 extern u8  g_Usart1RxDmaBuf[USART1_RXBUFF_SIZE];
-extern u8  g_Usart1FrameBuf[USART1_RXBUFF_SIZE];
+extern u8  g_Usart1FrameMailbox[APP_USART1_FRAME_MAILBOX_CAPACITY][USART1_RXBUFF_SIZE];
 extern u8  g_Usart1TxBuf[USART1_TXBUFF_SIZE];
 extern u8  aTxStartMessage[];
 extern u8  aTxEndMessage[];
-extern volatile unsigned short g_Usart1FrameLen;
-extern volatile u8 g_Usart1FrameReady;
+extern volatile unsigned short g_Usart1FrameMailboxLen[APP_USART1_FRAME_MAILBOX_CAPACITY];
+extern volatile u8 g_Usart1FrameMailboxHead;
+extern volatile u8 g_Usart1FrameMailboxTail;
+extern volatile u8 g_Usart1FrameMailboxCount;
 
 
 

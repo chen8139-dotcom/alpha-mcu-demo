@@ -328,11 +328,13 @@ u8 user_boot_flag = 0;
 //////////////////////////////////////////////////////////////////////////////////////////
 /* Private variables ---------------------------------------------------------*/
 uint8_t g_Usart1RxDmaBuf[USART1_RXBUFF_SIZE] = {0};
-uint8_t g_Usart1FrameBuf[USART1_RXBUFF_SIZE] = {0};
+uint8_t g_Usart1FrameMailbox[APP_USART1_FRAME_MAILBOX_CAPACITY][USART1_RXBUFF_SIZE] = {{0}};
 uint8_t g_Usart1TxBuf[USART1_TXBUFF_SIZE] = {0};
 
-volatile uint16_t g_Usart1FrameLen = 0;
-volatile uint8_t g_Usart1FrameReady = 0;
+volatile uint16_t g_Usart1FrameMailboxLen[APP_USART1_FRAME_MAILBOX_CAPACITY] = {0};
+volatile uint8_t g_Usart1FrameMailboxHead = 0;
+volatile uint8_t g_Usart1FrameMailboxTail = 0;
+volatile uint8_t g_Usart1FrameMailboxCount = 0;
 
 /* Private user code ---------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
