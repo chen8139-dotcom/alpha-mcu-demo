@@ -4,6 +4,9 @@
 # ZCode 会话内部文件
 .zcode/
 
+# 计划/PRD 文档
+plandoc/
+
 # Keil MDK-ARM build outputs
 PY32F003xx_Project_LL/MDK-ARM/Objects/
 PY32F003xx_Project_LL/MDK-ARM/Listings/

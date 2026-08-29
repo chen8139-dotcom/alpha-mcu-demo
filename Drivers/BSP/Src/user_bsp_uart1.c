@@ -84,11 +84,11 @@
 
 #include "user_bsp_uart1.h"
 
-extern volatile uint16_t g_Usart1FrameLen;
-extern volatile unsigned char g_Usart1FrameReady;
-
 extern unsigned char  g_Usart1RxDmaBuf[USART1_RXBUFF_SIZE];
-extern unsigned char  g_Usart1FrameBuf[USART1_RXBUFF_SIZE];
+extern unsigned char  g_Usart1FrameMailbox[APP_USART1_FRAME_MAILBOX_CAPACITY][USART1_RXBUFF_SIZE];
+extern volatile unsigned short g_Usart1FrameMailboxLen[APP_USART1_FRAME_MAILBOX_CAPACITY];
+extern volatile unsigned char g_Usart1FrameMailboxHead;
+extern volatile unsigned char g_Usart1FrameMailboxCount;
 
 
 
@@ -287,6 +287,7 @@ static void APP_UsartRxIdleCallback(USART_TypeDef *USARTx)
 {
   uint16_t dma_remaining;
   uint16_t frame_len;
+  uint8_t mailbox_slot;
   volatile uint32_t tmp;
 
   /* Clear IDLE flag: read SR then DR */
@@ -306,14 +307,11 @@ static void APP_UsartRxIdleCallback(USART_TypeDef *USARTx)
   if (frame_len > 0U)
   {
     /* The ISR only latches the frame. Parsing, TX and logging stay in main. */
-    if (g_Usart1FrameReady == 0U)
+    if (g_Usart1FrameMailboxCount < APP_USART1_FRAME_MAILBOX_CAPACITY)
     {
-      memcpy((void *)g_Usart1FrameBuf, (const void *)g_Usart1RxDmaBuf, frame_len);
-
-
-	  /////////////
-
-
+      mailbox_slot = g_Usart1FrameMailboxHead;
+      memcpy((void *)g_Usart1FrameMailbox[mailbox_slot],
+             (const void *)g_Usart1RxDmaBuf, frame_len);
 
 
 
@@ -321,12 +319,16 @@ static void APP_UsartRxIdleCallback(USART_TypeDef *USARTx)
 
 
 
-	  ////////////////////
+
+
+
 
 
 	  
-      g_Usart1FrameLen = frame_len;
-      g_Usart1FrameReady = 1U;
+      g_Usart1FrameMailboxLen[mailbox_slot] = frame_len;
+      g_Usart1FrameMailboxHead = (uint8_t)((mailbox_slot + 1U) %
+                                            APP_USART1_FRAME_MAILBOX_CAPACITY);
+      g_Usart1FrameMailboxCount++;
     }
   }
 

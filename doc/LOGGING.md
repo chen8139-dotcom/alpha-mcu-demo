@@ -43,7 +43,7 @@ hello PY32F003
 板载 LED（PB5）不会再执行独立的 1ms 启动翻转。LED 由 Beacon Mesh 状态机统一管理：上电前 3 秒每 500ms 翻转，之后 Leader 常亮、Follower 仅在有效 Leader 心跳时亮 100ms，未连接模组和 Candidate 状态灭灯。
 
 当前 `NVM_DEMO_TEST=0`，启动阶段默认不执行用户 Flash Dump/读写演示，避免阻塞式日志干扰 UART1 握手。
-进入主循环后，`Task_512ms()` 当前会持续输出周期日志。
+进入主循环后，默认配置下没有周期性任务日志：`Task_512ms()` 的日志由 `APP_TASK_512MS_WOS_LOG` 控制且默认关闭（见第 4、5.6 节）。
 
 ## 2. 串口资源分工
 
@@ -102,7 +102,8 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 | `DEF_Develop_Release` | `1` | 研发/发行阶段条件日志 | 生效 |
 | `APP_BLE_DEBUG_LOG` | `1U` | BLE/业务日志开关 | 生效 |
 | `APP_VERBOSE_UART1_RX` | `1U` | UART1 原始接收帧十六进制日志 | 生效 |
-| `APP_TASK_512MS_WOS_LOG` | `0U` | 预留的 512 ms WOS 日志开关 | 当前 `Task_512ms()` 日志未使用此宏 |
+| `APP_MESH_TRACE_LOG` | `1U` | 第二迭代 Mesh 队列、Relay、去重和时序追踪 | 生效 |
+| `APP_TASK_512MS_WOS_LOG` | `0U` | 512 ms WOS 日志开关 | 使用中：`Task_512ms()` 日志由此宏控制，当前默认关闭 |
 | `NVM_DEMO_TEST` | `0` | 启动时执行 Flash Dump/读写演示 | 默认关闭；需要时手动开启 |
 | `USER_LED_TEST` | `0` | 独立 LED 启动翻转测试 | 已关闭；LED 由 Beacon Mesh 状态机管理 |
 
@@ -110,6 +111,7 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 
 - `PY32F003xx_Project_LL/User/Inc/user_common.h`
 - `PY32F003xx_Project_LL/User/Inc/user_board_cfg.h`
+- `PY32F003xx_Project_LL/User/Src/user_ble_uart.c`（`APP_BLE_DEBUG_LOG`、`APP_VERBOSE_UART1_RX` 的 `#ifndef` 默认值）
 
 注意：`APP_BLE_DEBUG_LOG` 和 `APP_VERBOSE_UART1_RX` 使用 `#ifndef`，可以由工程编译
 宏或上层配置覆盖。新增日志开关时，应同时记录默认值、作用范围和发行版本行为。
@@ -139,8 +141,8 @@ TX DMA、TX 中断或 RAM 环形缓冲区。
 
 ### 5.3 UART1 接收日志
 
-UART1 通过 DMA 接收并由 IDLE 中断切帧，应用层在主循环中处理帧。启用
-`APP_BLE_DEBUG_LOG=1` 和 `APP_VERBOSE_UART1_RX=1` 时，UART2 会输出：
+UART1 通过 DMA 接收并由 IDLE 中断切帧，应用层在主循环中处理帧。`DEF_Develop_Release=1`、
+`APP_BLE_DEBUG_LOG=1` 和 `APP_VERBOSE_UART1_RX=1` 三者同时成立时，UART2 会输出：
 
 ```text
 [UART1 RX] len=...
@@ -171,16 +173,31 @@ UART1 协议层在主循环中输出以下业务日志：
 ```text
 [BLE] module ready
 [BLE] MAC/ElectionID=1A 09 E2 49 8F 34
-[MESH] INIT -> FOLLOWER reason=MAC_READY
-[MESH] FOLLOWER -> CANDIDATE reason=LEADER_TIMEOUT
-[MESH] CANDIDATE -> LEADER reason=CANDIDATE_DELAY
-[MESH] TX LEADER_ADV seq=1 network=0x1234 flags=0x00
-[REMOTE] source=遥控器 addr=0x1115 cmd=0x0A type=短按 para=0x00 rand=0x00 check=OK
+T=000300 [MESH] ROLE from=INIT to=FOLLOWER reason=MAC_READY leader=000000000000
+T=003500 [MESH] ROLE from=FOLLOWER to=CANDIDATE reason=LEADER_TIMEOUT leader=1A09E2498F34
+T=003900 [MESH] ROLE from=CANDIDATE to=LEADER reason=CANDIDATE_DELAY leader=1A09E2498F34
+T=003900 [TXQ] ENQUEUE type=LEADER_ADV priority=2 due_ms=3900 depth=1
+T=003900 [TXQ] SEND type=LEADER_ADV seq=1 queued_ms=0 actual_ms=3900 delay_ms=0 result=OK
+T=000600 [REMOTE] RX role=LEADER addr=0x1234 count=0x01 cmd=0x0A type=SHORT para=0x00 dedup=NEW action=CONSUME
+T=000600 [REMOTE] CONSUME addr=0x1234 count=0x01 cmd=0x0A type=SHORT para=0x00 dedup=NEW source=RAW
 ```
 
 业务日志由 `APP_BLE_DEBUG_LOG` 控制，原始 UART1 十六进制日志由
 `APP_VERBOSE_UART1_RX` 控制。当前固定 `NetworkID=0x1234`，收到 `Cmd=0xFF`
 只记录“configuration ignored”，不会修改或写入 NetworkID。
+
+第二迭代新增的 Mesh 追踪日志由 `APP_MESH_TRACE_LOG` 独立控制，默认开启，格式为：
+
+```text
+T=000001 [MESH] CONFIG network=0x1234 adv_ms=1000 sync_ms=1000 phase_ms=500 uart_min_ms=200 hold_ms=400 relay_ms=20..80 timeout_ms=3000 candidate_ms=300+(ElectionID[5]%200) txq_capacity=8 relay_capacity=4 dedup_capacity=32 dedup_ttl_ms=1000
+T=000700 [TXQ] SEND type=LEADER_ADV seq=1 queued_ms=0 actual_ms=700 delay_ms=700 result=OK
+```
+
+`queued_ms`/`delay_ms`/`queued_delay_ms` 按非负 tick 差值折算为毫秒，时间戳陈旧（时钟回绕或慢路径）时钳为 0，不会出现无符号下溢的大数值。
+
+新增日志只在主循环或任务上下文输出，不在 UART1、DMA、定时器或 GPIO 中断中调用
+`printf()`。高频重复 Beacon 和遥控器事件按去重键限频，避免阻塞式 UART2 日志影响
+UART1 的 200ms 最小发送间隔。
 
 UART1 中断只负责锁存 DMA 帧，不执行 `printf()` 或阻塞式发送。来源：
 `PY32F003xx_Project_LL/User/Src/user_ble_uart.c` 和
@@ -192,7 +209,10 @@ UART1 中断只负责锁存 DMA 帧，不执行 `printf()` 或阻塞式发送。
 
 - 按键短按输出 `track_xx KEY has been shortdown`。
 - 按键长按输出 `[PAIR] long press, factory re-provision`。
-- APP 开灯、关灯、非法动作和校验错误输出 `[BLE]` 日志。
+- 当前代码没有开灯/关灯业务日志。非法帧与校验错误日志的实际前缀与内容：
+  - `[REMOTE] invalid frame CID/Len/SigType/Version/XOR`：遥控器帧结构（CID/长度/签名类型/版本/XOR 校验）失败。
+  - `[MESH] RX Beacon checksum error`、`[MESH] RX Beacon ignored: NetworkID=...`：Beacon 校验和错误或网络不匹配。
+  - `[UART1 RX] invalid frame: too short / no valid header / invalid payload length / invalid length/tail`、`[UART1 RX] UART checksum error calc=... recv=...`：UART1 帧解析失败。
 
 来源：
 
@@ -212,8 +232,7 @@ track_xx Task_512ms is running...
 ### 5.7 时间同步辅助日志
 
 `APP_SyncLogWosTicks()` 可以输出 WOS tick、十六进制 tick 和运行时间，受
-`DEF_Develop_Release && APP_BLE_DEBUG_LOG` 控制。它是辅助接口，当前是否产生输出取决于
-业务代码是否调用该函数。
+`DEF_Develop_Release && APP_BLE_DEBUG_LOG` 控制。它是辅助接口；当前工程没有任何代码调用该函数，默认配置下不会产生输出。
 
 ## 6. 调试排查
 
@@ -253,7 +272,7 @@ track_xx Task_512ms is running...
 
 - Flash 整页 Dump。
 - UART1 原始帧十六进制打印。
-- 512 ms 周期日志。
+- 512 ms 周期日志（`APP_TASK_512MS_WOS_LOG`，默认已关闭）。
 - 高频任务中的循环日志。
 
 调试实时性问题时，应优先关闭 `NVM_DEMO_TEST`、详细 UART1 RX 日志和不必要的周期

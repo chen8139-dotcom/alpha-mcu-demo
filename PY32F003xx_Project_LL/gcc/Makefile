@@ -107,7 +107,7 @@ HEX  := $(BUILD_DIR)/Project.hex
 BIN  := $(BUILD_DIR)/Project.bin
 KEIL_BIN_DIR := $(PROJ)/MDK-ARM/bin
 
-.PHONY: all flash clean
+.PHONY: all flash clean test
 
 all: $(HEX) $(BIN) post-build
 	$(SZ) $(ELF)
@@ -133,6 +133,16 @@ flash: all
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+# --- Host-side pure protocol checks -----------------------------------------
+HOST_CC ?= cc
+HOST_TEST := $(BUILD_DIR)/mesh_logic_test
+
+test: $(HOST_TEST)
+	$(HOST_TEST)
+
+$(HOST_TEST): ../tests/mesh_logic_test.c ../User/Inc/user_ble_mesh_logic.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c99 -Wall -Wextra -pedantic -I../User/Inc $< -o $@
 
 # --- 依赖关系 ------------------------------------------------
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
