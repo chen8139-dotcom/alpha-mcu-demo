@@ -103,6 +103,19 @@ typedef enum
 	MESH_RELAY_REMOTE_83
 } mesh_relay_kind_t;
 
+typedef enum
+{
+	MESH_REMOTE_RELAY_NONE = 0U,
+	MESH_REMOTE_RELAY_PENDING_01,
+	MESH_REMOTE_RELAY_QUEUED_01,
+	MESH_REMOTE_RELAY_SENT_01,
+	MESH_REMOTE_RELAY_PENDING_00,
+	MESH_REMOTE_RELAY_QUEUED_00,
+	MESH_REMOTE_RELAY_SENT_00,
+	MESH_REMOTE_RELAY_DROPPED_01,
+	MESH_REMOTE_RELAY_DROPPED_00
+} mesh_remote_relay_state_t;
+
 typedef app_mesh_packet_key_t mesh_beacon_key_t;
 
 typedef struct
@@ -134,6 +147,7 @@ typedef struct
 	uint32_t scheduled_at;
 	uint32_t due_at;
 	uint32_t expire_at;
+	uint8_t relay_flags;
 	mesh_beacon_key_t beacon_key;
 	app_mesh_remote_key_t remote_key;
 	uint8_t beacon[APP_BEACON_LENGTH];
@@ -173,6 +187,7 @@ typedef struct
 	uint32_t remote_dedup_expiry[APP_MESH_DEDUP_CAPACITY];
 	uint8_t remote_dedup_count[APP_MESH_DEDUP_CAPACITY];
 	uint8_t remote_dedup_valid[APP_MESH_DEDUP_CAPACITY];
+	mesh_remote_relay_state_t remote_relay_state[APP_MESH_DEDUP_CAPACITY];
 	uint8_t beacon_dedup_cursor;
 	uint8_t remote_dedup_cursor;
 } mesh_runtime_t;
@@ -408,10 +423,52 @@ static uint8_t APP_MeshQueueDepth(void)
 	return depth;
 }
 
+static int8_t APP_MeshFindRemoteRelaySlot(const app_mesh_remote_key_t *key,
+	                                      uint32_t now)
+{
+	uint8_t i;
+
+	for (i = 0U; i < APP_MESH_DEDUP_CAPACITY; i++)
+	{
+		if ((g_mesh.remote_dedup_valid[i] != 0U) &&
+		    (APP_MeshTimeReached(now, g_mesh.remote_dedup_expiry[i]) == 0U) &&
+		    APP_MeshLogicRemoteKeyEqual(&g_mesh.remote_dedup[i], key))
+			return (int8_t)i;
+	}
+	return -1;
+}
+
+static mesh_remote_relay_state_t APP_MeshGetRemoteRelayState(
+	const app_mesh_remote_key_t *key, uint32_t now)
+{
+	int8_t slot = APP_MeshFindRemoteRelaySlot(key, now);
+
+	if (slot < 0) return MESH_REMOTE_RELAY_NONE;
+	return g_mesh.remote_relay_state[(uint8_t)slot];
+}
+
+static void APP_MeshSetRemoteRelayState(const app_mesh_remote_key_t *key,
+	                                    uint32_t now,
+	                                    mesh_remote_relay_state_t state)
+{
+	int8_t slot = APP_MeshFindRemoteRelaySlot(key, now);
+
+	if (slot >= 0) g_mesh.remote_relay_state[(uint8_t)slot] = state;
+}
+
+static mesh_remote_relay_state_t APP_MeshDroppedRemoteRelayState(uint8_t flags)
+{
+	return (flags == APP_MESH_FLAGS_TERMINAL) ?
+	       MESH_REMOTE_RELAY_DROPPED_00 : MESH_REMOTE_RELAY_DROPPED_01;
+}
+
 static void APP_MeshQueueDrop(mesh_tx_item_t *item, mesh_tx_state_t state,
 	                          const char *reason)
 {
 	item->state = state;
+	if ((item->type == MESH_TX_RELAY) && (item->has_remote_key != 0U))
+		APP_MeshSetRemoteRelayState(&item->remote_key, wos,
+		                            APP_MeshDroppedRemoteRelayState(item->beacon[4]));
 	(void)reason;
 	APP_MESH_TRACE("TXQ", "%s type=%s reason=%s depth=%u",
 	               (state == MESH_TX_EXPIRED) ? "EXPIRE" : "DROP",
@@ -512,40 +569,6 @@ static uint8_t APP_MeshQueueBeacon(mesh_tx_type_t type, uint8_t priority,
 	return 1U;
 }
 
-static void APP_MeshCancelRelayBeacon(const mesh_beacon_key_t *key,
-                                  const char *reason)
-{
-	uint8_t i;
-	(void)reason;
-
-	for (i = 0U; i < APP_MESH_RELAY_CAPACITY; i++)
-	{
-		if ((g_mesh.relay[i].active != 0U) &&
-		    (g_mesh.relay[i].kind == MESH_RELAY_BEACON) &&
-		    APP_MeshBeaconKeyEqual(&g_mesh.relay[i].beacon_key, key))
-		{
-			g_mesh.relay[i].active = 0U;
-			APP_MESH_TRACE("RELAY", "CANCEL key=%04X:%u:%02X reason=%s",
-			               (unsigned int)key->network_id, (unsigned int)key->seq,
-			               (unsigned int)key->cmd, reason);
-		}
-	}
-	for (i = 0U; i < APP_MESH_TX_QUEUE_CAPACITY; i++)
-	{
-		if ((g_mesh.tx_queue[i].active != 0U) &&
-		    (g_mesh.tx_queue[i].type == MESH_TX_RELAY) &&
-		    (g_mesh.tx_queue[i].has_remote_key == 0U) &&
-		    APP_MeshBeaconKeyEqual(&g_mesh.tx_queue[i].beacon_key, key))
-		{
-			g_mesh.tx_queue[i].state = MESH_TX_CANCELLED;
-			g_mesh.tx_queue[i].active = 0U;
-			APP_MESH_TRACE("TXQ", "CANCEL type=RELAY key=%04X:%u:%02X reason=%s",
-			               (unsigned int)key->network_id, (unsigned int)key->seq,
-			               (unsigned int)key->cmd, reason);
-		}
-	}
-}
-
 static void APP_MeshCancelRelayRemote(const app_mesh_remote_key_t *key,
 	                                  const char *reason)
 {
@@ -618,11 +641,27 @@ static uint8_t APP_MeshScheduleBeaconRelay(const uint8_t beacon[APP_BEACON_LENGT
 }
 
 static uint8_t APP_MeshScheduleRemoteRelay(const app_mesh_remote_key_t *remote,
+	                                       uint8_t relay_flags,
 	                                       uint32_t *delay_out)
 {
 	uint8_t i;
 	uint32_t now = wos;
 	uint32_t delay;
+	mesh_remote_relay_state_t state;
+
+	if (APP_MeshLogicIsValidFlags(relay_flags) == 0U) return 0U;
+	state = APP_MeshGetRemoteRelayState(remote, now);
+	if ((state != MESH_REMOTE_RELAY_NONE) &&
+	    !((relay_flags == APP_MESH_FLAGS_TERMINAL) &&
+	      (state == MESH_REMOTE_RELAY_DROPPED_01)))
+	{
+		APP_MESH_TRACE("RELAY", "SUPPRESS kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X flags=0x%02X reason=STATE_EXISTS state=%u",
+		               (unsigned int)remote->address, (unsigned int)remote->count,
+		               (unsigned int)remote->cmd, (unsigned int)remote->cmd_type,
+		               (unsigned int)remote->para, (unsigned int)relay_flags,
+		               (unsigned int)state);
+		return 0U;
+	}
 
 	for (i = 0U; i < APP_MESH_RELAY_CAPACITY; i++)
 	{
@@ -632,24 +671,31 @@ static uint8_t APP_MeshScheduleRemoteRelay(const app_mesh_remote_key_t *remote,
 			g_mesh.relay[i].active = 1U;
 			g_mesh.relay[i].kind = MESH_RELAY_REMOTE_83;
 			g_mesh.relay[i].scheduled_at = now;
+			g_mesh.relay[i].relay_flags = relay_flags;
 			delay = APP_TICKS_RELAY_MIN +
 			        (APP_MeshPseudoRandom(now, (uint8_t)(remote->count ^ remote->cmd ^ g_mesh.election_id[5])) % APP_TICKS_RELAY_RANGE);
 			g_mesh.relay[i].due_at = now + delay;
 			g_mesh.relay[i].expire_at = now + APP_TICKS_400MS + APP_TICKS_RELAY_MIN;
 			g_mesh.relay[i].remote_key = *remote;
 			if (delay_out != (uint32_t *)0) *delay_out = delay;
-			APP_MESH_TRACE("RELAY", "SCHEDULE kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X delay_ms=%lu",
+			APP_MeshSetRemoteRelayState(remote, now,
+			                            (relay_flags == APP_MESH_FLAGS_TERMINAL) ?
+			                            MESH_REMOTE_RELAY_PENDING_00 :
+			                            MESH_REMOTE_RELAY_PENDING_01);
+			APP_MESH_TRACE("RELAY", "SCHEDULE kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X flags=0x%02X delay_ms=%lu",
 			               (unsigned int)remote->address, (unsigned int)remote->count,
 			               (unsigned int)remote->cmd, (unsigned int)remote->cmd_type,
 			               (unsigned int)remote->para,
+			               (unsigned int)relay_flags,
 			               (unsigned long)((uint64_t)delay * USER_WOS_TICK_US / 1000ULL));
 			return 1U;
 		}
 	}
-	APP_MESH_TRACE("RELAY", "SUPPRESS key=%04X:%u:%02X:%02X:%02X reason=RELAY_QUEUE_FULL",
+	APP_MeshSetRemoteRelayState(remote, now, APP_MeshDroppedRemoteRelayState(relay_flags));
+	APP_MESH_TRACE("RELAY", "SUPPRESS key=%04X:%u:%02X:%02X:%02X flags=0x%02X reason=RELAY_QUEUE_FULL",
 	               (unsigned int)remote->address, (unsigned int)remote->count,
 	               (unsigned int)remote->cmd, (unsigned int)remote->cmd_type,
-	               (unsigned int)remote->para);
+	               (unsigned int)remote->para, (unsigned int)relay_flags);
 	return 0U;
 }
 
@@ -669,6 +715,9 @@ static void APP_MeshProcessRelay(uint32_t now)
 		if (APP_MeshTimeReached(now, g_mesh.relay[i].expire_at) != 0U)
 		{
 			APP_MESH_TRACE("RELAY", "CANCEL reason=RELAY_QUEUE_TIMEOUT");
+			if (g_mesh.relay[i].kind == MESH_RELAY_REMOTE_83)
+				APP_MeshSetRemoteRelayState(&g_mesh.relay[i].remote_key, now,
+				                            APP_MeshDroppedRemoteRelayState(g_mesh.relay[i].relay_flags));
 			g_mesh.relay[i].active = 0U;
 			continue;
 		}
@@ -700,7 +749,17 @@ static void APP_MeshProcessRelay(uint32_t now)
 		}
 		else
 		{
-			APP_MeshLogicBuildRemoteRelay(&g_mesh.relay[i].remote_key, encoded);
+			if (APP_MeshLogicBuildRemoteRelay(&g_mesh.relay[i].remote_key,
+			                                  g_mesh.relay[i].relay_flags,
+			                                  encoded) == 0U)
+			{
+				APP_MeshSetRemoteRelayState(&g_mesh.relay[i].remote_key, now,
+				                            APP_MeshDroppedRemoteRelayState(g_mesh.relay[i].relay_flags));
+				APP_MESH_TRACE("RELAY", "SUPPRESS kind=REMOTE_83 reason=INVALID_FLAGS flags=0x%02X",
+				               (unsigned int)g_mesh.relay[i].relay_flags);
+				g_mesh.relay[i].active = 0U;
+				continue;
+			}
 			key.network_id = g_mesh.relay[i].remote_key.address;
 			key.seq = g_mesh.relay[i].remote_key.count;
 			key.cmd = APP_BEACON_CMD_REMOTE_RELAY;
@@ -708,13 +767,22 @@ static void APP_MeshProcessRelay(uint32_t now)
 			                        now + APP_TICKS_400MS, &key,
 			                        &g_mesh.relay[i].remote_key) == 0U)
 			{
+				APP_MeshSetRemoteRelayState(&g_mesh.relay[i].remote_key, now,
+				                            APP_MeshDroppedRemoteRelayState(g_mesh.relay[i].relay_flags));
 				APP_MESH_TRACE("RELAY", "SUPPRESS kind=REMOTE_83 key=%04X:%u:%02X reason=TX_QUEUE_FULL",
 				               (unsigned int)key.network_id, (unsigned int)key.seq,
 				               (unsigned int)key.cmd);
 			}
-			APP_MESH_TRACE("RELAY", "READY kind=REMOTE_83 key=%04X:%u:%02X flags=0x03",
+			else
+			{
+				APP_MeshSetRemoteRelayState(&g_mesh.relay[i].remote_key, now,
+				                            (g_mesh.relay[i].relay_flags == APP_MESH_FLAGS_TERMINAL) ?
+				                            MESH_REMOTE_RELAY_QUEUED_00 :
+				                            MESH_REMOTE_RELAY_QUEUED_01);
+			}
+			APP_MESH_TRACE("RELAY", "READY kind=REMOTE_83 key=%04X:%u:%02X flags=0x%02X",
 			               (unsigned int)key.network_id, (unsigned int)key.seq,
-			               (unsigned int)key.cmd);
+			               (unsigned int)key.cmd, (unsigned int)g_mesh.relay[i].relay_flags);
 		}
 		g_mesh.relay[i].active = 0U;
 	}
@@ -788,6 +856,7 @@ static uint8_t APP_MeshRemoteDedup(const app_mesh_remote_key_t *key, uint32_t no
 	g_mesh.remote_dedup[slot] = *key;
 	g_mesh.remote_dedup_expiry[slot] = now + APP_MESH_MS_TO_TICKS(APP_MESH_DEDUP_TTL_MS);
 	g_mesh.remote_dedup_count[slot] = 1U;
+	g_mesh.remote_relay_state[slot] = MESH_REMOTE_RELAY_NONE;
 	g_mesh.remote_dedup_cursor = (uint8_t)((slot + 1U) % APP_MESH_DEDUP_CAPACITY);
 	return 0U;
 }
@@ -818,7 +887,8 @@ static uint8_t APP_MeshQueueLeaderFrame(mesh_tx_type_t type, uint8_t cmd,
 	uint8_t encoded[APP_BEACON_LENGTH];
 	mesh_beacon_key_t key;
 
-	(void)APP_MeshBuildLeaderBeacon(cmd, 0x01U, APP_MeshNextSeq(), encoded);
+	(void)APP_MeshBuildLeaderBeacon(cmd, APP_MESH_FLAGS_RELAYABLE,
+	                               APP_MeshNextSeq(), encoded);
 	key.network_id = APP_BLE_NETWORK_ID;
 	key.seq = encoded[2];
 	key.cmd = cmd;
@@ -946,6 +1016,11 @@ static void APP_MeshProcessTxQueue(uint32_t now)
 	actual = wos;
 	g_mesh.beacon_hold_until = actual + APP_TICKS_400MS;
 	item->state = MESH_TX_SENT;
+	if ((item->type == MESH_TX_RELAY) && (item->has_remote_key != 0U))
+		APP_MeshSetRemoteRelayState(&item->remote_key, actual,
+		                            (item->beacon[4] == APP_MESH_FLAGS_TERMINAL) ?
+		                            MESH_REMOTE_RELAY_SENT_00 :
+		                            MESH_REMOTE_RELAY_SENT_01);
 	APP_MESH_TRACE("TXQ", "SEND type=%s seq=%u queued_ms=%lu actual_ms=%lu delay_ms=%lu result=OK",
 	               APP_MeshTxName(item->type), (unsigned int)item->beacon[2],
 	               (unsigned long)APP_MeshTicksToMs(item->created_at),
@@ -1010,14 +1085,7 @@ static void APP_MeshHandleRemoteFrame(const uint8_t *payload, uint16_t payload_l
 		               (unsigned int)remote.address, (unsigned int)remote.count);
 		return;
 	}
-	if (APP_MeshRemoteDedup(&remote, wos) != 0U)
-	{
-		/* A duplicate raw controller frame is also evidence that a peer may
-		 * already be carrying this command.  Do not leave our own 0x83 relay
-		 * pending in that case. */
-		APP_MeshCancelRelayRemote(&remote, "REMOTE_DUPLICATE");
-		return;
-	}
+	if (APP_MeshRemoteDedup(&remote, wos) != 0U) return;
 	APP_MESH_TRACE("REMOTE", "RX role=%s addr=0x%04X count=0x%02X cmd=0x%02X type=%s para=0x%02X dedup=NEW action=%s",
 	               APP_MeshRoleName(g_mesh.role), (unsigned int)remote.address,
 	               (unsigned int)remote.count, (unsigned int)remote.cmd,
@@ -1029,11 +1097,13 @@ static void APP_MeshHandleRemoteFrame(const uint8_t *payload, uint16_t payload_l
 	}
 	else if (g_mesh.role == MESH_ROLE_FOLLOWER)
 	{
-		if (APP_MeshScheduleRemoteRelay(&remote, &relay_delay) != 0U)
+		if (APP_MeshScheduleRemoteRelay(&remote, APP_MESH_FLAGS_RELAYABLE,
+		                                &relay_delay) != 0U)
 		{
-			APP_MESH_TRACE("REMOTE", "ENQUEUE_83 addr=0x%04X count=0x%02X cmd=0x%02X flags=0x03 para_len=1 para=0x%02X delay_ms=%lu",
+			APP_MESH_TRACE("REMOTE", "ENQUEUE_83 addr=0x%04X count=0x%02X cmd=0x%02X flags=0x%02X para_len=1 para=0x%02X delay_ms=%lu",
 			               (unsigned int)remote.address, (unsigned int)remote.count,
 			               (unsigned int)remote.cmd, (unsigned int)remote.para,
+			               (unsigned int)APP_MESH_FLAGS_RELAYABLE,
 			               (unsigned long)((uint64_t)relay_delay * USER_WOS_TICK_US / 1000ULL));
 		}
 	}
@@ -1046,11 +1116,10 @@ static uint8_t APP_MeshValidateBeaconSemantics(const app_mesh_beacon_t *beacon)
 	if (beacon->network_id != APP_BLE_NETWORK_ID) return 0U;
 	if ((beacon->cmd < APP_BEACON_CMD_LEADER_ADV) ||
 	    (beacon->cmd > APP_BEACON_CMD_REMOTE_RELAY)) return 0U;
-	if (((beacon->flags & 0x02U) != 0U) &&
-	    ((beacon->flags & 0x01U) == 0U)) return 0U;
+	if (APP_MeshLogicIsValidFlags(beacon->flags) == 0U) return 0U;
 	if (beacon->cmd == APP_BEACON_CMD_REMOTE_RELAY)
 	{
-		if ((beacon->flags != 0x03U) || (beacon->payload[0] != beacon->seq) ||
+		if ((beacon->payload[0] != beacon->seq) ||
 		    (beacon->payload[3] != 1U) || (beacon->payload[1] == 0xFFU)) return 0U;
 		for (i = 5U; i < APP_MESH_BEACON_PAYLOAD_LENGTH; i++)
 		{
@@ -1093,13 +1162,56 @@ static void APP_MeshHandleLeaderBeacon(const app_mesh_beacon_t *beacon,
 	(void)beacon;
 }
 
+static void APP_MeshHandleRemote83Relay(const app_mesh_remote_key_t *remote,
+	                                    uint8_t flags)
+{
+	mesh_remote_relay_state_t state;
+	uint32_t relay_delay;
+
+	if ((g_mesh.role != MESH_ROLE_FOLLOWER) ||
+	    (flags != APP_MESH_FLAGS_RELAYABLE))
+		return;
+
+	state = APP_MeshGetRemoteRelayState(remote, wos);
+	if ((state == MESH_REMOTE_RELAY_PENDING_01) ||
+	    (state == MESH_REMOTE_RELAY_QUEUED_01))
+	{
+		APP_MeshCancelRelayRemote(remote, "PEER_RELAYABLE_REPLACE");
+		APP_MeshSetRemoteRelayState(remote, wos, MESH_REMOTE_RELAY_NONE);
+		APP_MESH_TRACE("RELAY", "REPLACE kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X old_flags=0x%02X new_flags=0x%02X",
+		               (unsigned int)remote->address, (unsigned int)remote->count,
+		               (unsigned int)remote->cmd, (unsigned int)remote->cmd_type,
+		               (unsigned int)remote->para,
+		               (unsigned int)APP_MESH_FLAGS_RELAYABLE,
+		               (unsigned int)APP_MESH_FLAGS_TERMINAL);
+	}
+	else if ((state != MESH_REMOTE_RELAY_NONE) &&
+	         (state != MESH_REMOTE_RELAY_DROPPED_01))
+	{
+		APP_MESH_TRACE("RELAY", "SUPPRESS kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X flags=0x%02X reason=STATE_EXISTS state=%u",
+		               (unsigned int)remote->address, (unsigned int)remote->count,
+		               (unsigned int)remote->cmd, (unsigned int)remote->cmd_type,
+		               (unsigned int)remote->para, (unsigned int)APP_MESH_FLAGS_TERMINAL,
+		               (unsigned int)state);
+		return;
+	}
+
+	if (APP_MeshScheduleRemoteRelay(remote, APP_MESH_FLAGS_TERMINAL,
+	                                &relay_delay) != 0U)
+		APP_MESH_TRACE("REMOTE", "ENQUEUE_83_RELAY addr=0x%04X count=0x%02X cmd=0x%02X flags=0x%02X para=0x%02X delay_ms=%lu",
+		               (unsigned int)remote->address, (unsigned int)remote->count,
+		               (unsigned int)remote->cmd,
+		               (unsigned int)APP_MESH_FLAGS_TERMINAL,
+		               (unsigned int)remote->para,
+		               (unsigned long)((uint64_t)relay_delay * USER_WOS_TICK_US / 1000ULL));
+}
+
 static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_len)
 {
 	app_mesh_beacon_t beacon;
 	mesh_beacon_key_t key;
 	uint8_t source_id[6];
-	uint8_t relay_allowed;
-	uint8_t relayed;
+	uint8_t received_as_follower;
 	uint32_t now = wos;
 
 	if (payload_len != APP_BEACON_LENGTH) return;
@@ -1131,8 +1243,6 @@ static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_l
 	key.network_id = beacon.network_id;
 	key.seq = beacon.seq;
 	key.cmd = beacon.cmd;
-	relay_allowed = (beacon.flags & 0x01U) ? 1U : 0U;
-	relayed = (beacon.flags & 0x02U) ? 1U : 0U;
 
 	if (beacon.cmd == APP_BEACON_CMD_REMOTE_RELAY)
 	{
@@ -1142,12 +1252,10 @@ static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_l
 		remote.cmd = beacon.payload[1];
 		remote.cmd_type = beacon.payload[2];
 		remote.para = beacon.payload[4];
-		if (APP_MeshBeaconDedup(&key, now, "RELAYED") != 0U)
-		{
-			APP_MeshCancelRelayRemote(&remote, "RELAYED_DUPLICATE");
+		if (APP_MeshBeaconDedup(&key, now,
+		                       (beacon.flags == APP_MESH_FLAGS_RELAYABLE) ?
+		                       "RELAYABLE" : "TERMINAL") != 0U)
 			return;
-		}
-		APP_MeshCancelRelayRemote(&remote, "RELAYED_DUPLICATE");
 		{
 			uint8_t remote_duplicate = APP_MeshRemoteDedup(&remote, now);
 		APP_MESH_TRACE("REMOTE", "RX_83 role=%s addr=0x%04X count=0x%02X cmd=0x%02X para_len=1 para=0x%02X flags=0x%02X",
@@ -1156,6 +1264,16 @@ static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_l
 		               (unsigned int)remote.para, (unsigned int)beacon.flags);
 		if ((g_mesh.role == MESH_ROLE_LEADER) && (remote_duplicate == 0U))
 			APP_MeshConsumeRemote(&remote, 1U);
+		else if (g_mesh.role == MESH_ROLE_FOLLOWER)
+		{
+			if (beacon.flags == APP_MESH_FLAGS_RELAYABLE)
+				APP_MeshHandleRemote83Relay(&remote, beacon.flags);
+			else
+				APP_MESH_TRACE("RELAY", "SUPPRESS kind=REMOTE_83 key=%04X:%u:%02X:%02X:%02X flags=0x%02X reason=TERMINAL_NO_RELAY",
+				               (unsigned int)remote.address, (unsigned int)remote.count,
+				               (unsigned int)remote.cmd, (unsigned int)remote.cmd_type,
+				               (unsigned int)remote.para, (unsigned int)beacon.flags);
+		}
 		}
 		return;
 	}
@@ -1172,15 +1290,13 @@ static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_l
 		return;
 	}
 	if (APP_MeshBeaconDedup(&key, now,
-	                       (relayed != 0U) ? "RELAYED" : "RAW") != 0U)
-	{
-		if (relayed != 0U) APP_MeshCancelRelayBeacon(&key, "RELAYED_DUPLICATE");
-		return;
-	}
+	                       (beacon.flags == APP_MESH_FLAGS_RELAYABLE) ?
+	                       "RELAYABLE" : "TERMINAL") != 0U) return;
+	received_as_follower = (g_mesh.role == MESH_ROLE_FOLLOWER) ? 1U : 0U;
 	APP_MESH_TRACE("MESH", "RX network=0x%04X cmd=%s seq=%u flags=0x%02X origin=%s source=%02X%02X%02X%02X%02X%02X key=%04X:%u:%02X checksum=OK heartbeat=%s sync=%s",
 	               (unsigned int)beacon.network_id, APP_MeshCmdName(beacon.cmd),
 	               (unsigned int)beacon.seq, (unsigned int)beacon.flags,
-	               (relayed != 0U) ? "RELAYED" : "RAW",
+	               (beacon.flags == APP_MESH_FLAGS_RELAYABLE) ? "RELAYABLE" : "TERMINAL",
 	               source_id[0], source_id[1], source_id[2], source_id[3], source_id[4], source_id[5],
 	               (unsigned int)key.network_id,
 	               (unsigned int)key.seq, (unsigned int)key.cmd,
@@ -1212,15 +1328,16 @@ static void APP_MeshHandleBeaconFrame(const uint8_t *payload, uint16_t payload_l
 	{
 		APP_MeshHandleLeaderBeacon(&beacon, source_id, now);
 	}
-	if ((relay_allowed != 0U) && (relayed == 0U))
+	if ((received_as_follower != 0U) &&
+	    (beacon.flags == APP_MESH_FLAGS_RELAYABLE))
 	{
 		(void)APP_MeshScheduleBeaconRelay(payload, &key);
 	}
-	else if (relayed != 0U)
+	else if (beacon.flags == APP_MESH_FLAGS_TERMINAL)
 	{
-		APP_MESH_TRACE("RELAY", "SUPPRESS key=%04X:%u:%02X reason=ALREADY_RELAYED",
+		APP_MESH_TRACE("RELAY", "SUPPRESS key=%04X:%u:%02X flags=0x%02X reason=TERMINAL_NO_RELAY",
 		               (unsigned int)key.network_id, (unsigned int)key.seq,
-		               (unsigned int)key.cmd);
+		               (unsigned int)key.cmd, (unsigned int)beacon.flags);
 	}
 }
 
@@ -1399,7 +1516,7 @@ void APP_BleMeshRequestResign(uint8_t reason)
 	beacon.network_id = APP_BLE_NETWORK_ID;
 	beacon.seq = APP_MeshNextSeq();
 	beacon.cmd = APP_BEACON_CMD_LEADER_RESIGN;
-	beacon.flags = 0x01U;
+	beacon.flags = APP_MESH_FLAGS_RELAYABLE;
 	memcpy(beacon.payload, g_mesh.election_id, 6U);
 	beacon.payload[6] = reason;
 	APP_MeshLogicEncodeBeacon(&beacon, encoded);
