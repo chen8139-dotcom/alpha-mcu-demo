@@ -52,23 +52,29 @@ static void test_beacon_relay_copy(void)
 	app_mesh_beacon_t input;
 	app_mesh_beacon_t output;
 	uint8_t original[APP_MESH_BEACON_LENGTH];
-	uint8_t relayed[APP_MESH_BEACON_LENGTH];
+	uint8_t relay_output[APP_MESH_BEACON_LENGTH];
 	uint8_t i;
 
 	memset(&input, 0xA5, sizeof(input));
 	input.network_id = 0x1234U;
 	input.seq = 0x22U;
 	input.cmd = 0x81U;
-	input.flags = 0x05U;
+	input.flags = APP_MESH_FLAGS_RELAYABLE;
 	APP_MeshLogicEncodeBeacon(&input, original);
-	assert(APP_MeshLogicBuildBeaconRelay(original, relayed) != 0U);
-	assert(APP_MeshLogicDecodeBeacon(relayed, &output) != 0U);
+	assert(APP_MeshLogicBuildBeaconRelay(original, relay_output) != 0U);
+	assert(APP_MeshLogicDecodeBeacon(relay_output, &output) != 0U);
 	for (i = 0U; i < 24U; i++)
 	{
-		if (i != 4U) assert(relayed[i] == original[i]);
+		if (i != 4U) assert(relay_output[i] == original[i]);
 	}
-	assert(relayed[4] == 0x07U);
-	assert(relayed[24] == APP_MeshLogicChecksum(relayed, 24U));
+	assert(relay_output[4] == APP_MESH_FLAGS_TERMINAL);
+	assert(relay_output[24] == APP_MeshLogicChecksum(relay_output, 24U));
+	input.flags = APP_MESH_FLAGS_TERMINAL;
+	APP_MeshLogicEncodeBeacon(&input, original);
+	assert(APP_MeshLogicBuildBeaconRelay(original, relay_output) == 0U);
+	input.flags = 0x03U;
+	APP_MeshLogicEncodeBeacon(&input, original);
+	assert(APP_MeshLogicBuildBeaconRelay(original, relay_output) == 0U);
 }
 
 static void test_uart_frame(void)
@@ -103,6 +109,30 @@ static void test_packet_and_remote_keys(void)
 	assert(APP_MeshLogicRemoteKeyEqual(&left, &right) != 0U);
 	right.para++;
 	assert(APP_MeshLogicRemoteKeyEqual(&left, &right) == 0U);
+}
+
+static void test_beacon_key_ignores_flags(void)
+{
+	app_mesh_beacon_t relayable;
+	app_mesh_beacon_t terminal;
+	app_mesh_packet_key_t left;
+	app_mesh_packet_key_t right;
+
+	memset(&relayable, 0, sizeof(relayable));
+	relayable.network_id = 0x1234U;
+	relayable.seq = 0x21U;
+	relayable.cmd = APP_MESH_REMOTE_RELAY_CMD;
+	relayable.flags = APP_MESH_FLAGS_RELAYABLE;
+	terminal = relayable;
+	terminal.flags = APP_MESH_FLAGS_TERMINAL;
+
+	left.network_id = relayable.network_id;
+	left.seq = relayable.seq;
+	left.cmd = relayable.cmd;
+	right.network_id = terminal.network_id;
+	right.seq = terminal.seq;
+	right.cmd = terminal.cmd;
+	assert(APP_MeshLogicPacketKeyEqual(&left, &right) != 0U);
 }
 
 static void test_scheduler_contract(void)
@@ -171,18 +201,36 @@ static void test_remote_relay_encoding(void)
 	remote.cmd = 0x0AU;
 	remote.cmd_type = 0x00U;
 	remote.para = 0x5CU;
-	APP_MeshLogicBuildRemoteRelay(&remote, encoded);
+	assert(APP_MeshLogicBuildRemoteRelay(&remote, APP_MESH_FLAGS_RELAYABLE, encoded) != 0U);
 	assert(APP_MeshLogicDecodeBeacon(encoded, &beacon) != 0U);
 	assert(beacon.network_id == 0x1234U);
 	assert(beacon.seq == 0x21U);
 	assert(beacon.cmd == 0x83U);
-	assert(beacon.flags == 0x03U);
+	assert(beacon.flags == APP_MESH_FLAGS_RELAYABLE);
 	assert(beacon.payload[0] == 0x21U);
 	assert(beacon.payload[1] == 0x0AU);
 	assert(beacon.payload[2] == 0x00U);
 	assert(beacon.payload[3] == 1U);
 	assert(beacon.payload[4] == 0x5CU);
 	assert(beacon.payload[5] == 0U);
+	assert(APP_MeshLogicBuildRemoteRelay(&remote, APP_MESH_FLAGS_TERMINAL, encoded) != 0U);
+	assert(APP_MeshLogicDecodeBeacon(encoded, &beacon) != 0U);
+	assert(beacon.flags == APP_MESH_FLAGS_TERMINAL);
+	assert(beacon.network_id == remote.address);
+	assert(beacon.seq == remote.count);
+	assert(beacon.cmd == APP_MESH_REMOTE_RELAY_CMD);
+	assert(beacon.payload[0] == remote.count);
+	assert(beacon.payload[1] == remote.cmd);
+	assert(beacon.payload[2] == remote.cmd_type);
+	assert(beacon.payload[3] == 1U);
+	assert(beacon.payload[4] == remote.para);
+	assert(beacon.payload[5] == 0U);
+	assert(APP_MeshLogicIsValidFlags(0x00U) != 0U);
+	assert(APP_MeshLogicIsValidFlags(0x01U) != 0U);
+	assert(APP_MeshLogicIsValidFlags(0x02U) == 0U);
+	assert(APP_MeshLogicIsValidFlags(0x03U) == 0U);
+	assert(APP_MeshLogicBuildRemoteRelay(&remote, 0x02U, encoded) == 0U);
+	assert(APP_MeshLogicBuildRemoteRelay(&remote, 0x03U, encoded) == 0U);
 	assert(APP_MeshLogicRemoteKeyEqual(&remote, &remote) != 0U);
 	remote.para ^= 1U;
 	assert(APP_MeshLogicRemoteKeyEqual(&remote, &((app_mesh_remote_key_t){0x1234U, 0x21U, 0x0AU, 0x00U, 0x5CU})) == 0U);
@@ -194,6 +242,7 @@ int main(void)
 	test_beacon_relay_copy();
 	test_uart_frame();
 	test_packet_and_remote_keys();
+	test_beacon_key_ignores_flags();
 	test_remote_relay_encoding();
 	test_scheduler_contract();
 	test_state_timing_and_resign();

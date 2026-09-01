@@ -8,6 +8,8 @@
 #define APP_MESH_BEACON_PAYLOAD_LENGTH 19U
 #define APP_MESH_REMOTE_RELAY_CMD 0x83U
 #define APP_MESH_UART_TAIL 0xFEU
+#define APP_MESH_FLAGS_TERMINAL 0x00U
+#define APP_MESH_FLAGS_RELAYABLE 0x01U
 
 typedef struct
 {
@@ -112,17 +114,24 @@ static uint8_t APP_MeshLogicDecodeBeacon(const uint8_t in[APP_MESH_BEACON_LENGTH
 	return 1U;
 }
 
+static uint8_t APP_MeshLogicIsValidFlags(uint8_t flags)
+{
+	return (flags == APP_MESH_FLAGS_TERMINAL) ||
+	       (flags == APP_MESH_FLAGS_RELAYABLE);
+}
+
 static uint8_t APP_MeshLogicBuildBeaconRelay(
 	const uint8_t in[APP_MESH_BEACON_LENGTH],
 	uint8_t out[APP_MESH_BEACON_LENGTH])
 {
 	app_mesh_beacon_t beacon;
 
-	if (APP_MeshLogicDecodeBeacon(in, &beacon) == 0U)
+	if ((APP_MeshLogicDecodeBeacon(in, &beacon) == 0U) ||
+	    (beacon.flags != APP_MESH_FLAGS_RELAYABLE))
 	{
 		return 0U;
 	}
-	beacon.flags |= 0x02U;
+	beacon.flags = APP_MESH_FLAGS_TERMINAL;
 	APP_MeshLogicEncodeBeacon(&beacon, out);
 	return 1U;
 }
@@ -134,22 +143,31 @@ static uint8_t APP_MeshLogicPacketKeyEqual(const app_mesh_packet_key_t *left,
 	       (left->seq == right->seq) && (left->cmd == right->cmd);
 }
 
-static void APP_MeshLogicBuildRemoteRelay(const app_mesh_remote_key_t *remote,
-	                                      uint8_t out[APP_MESH_BEACON_LENGTH])
+static uint8_t APP_MeshLogicBuildRemoteRelay(const app_mesh_remote_key_t *remote,
+	                                         uint8_t flags,
+	                                         uint8_t out[APP_MESH_BEACON_LENGTH])
 {
 	app_mesh_beacon_t beacon;
+
+	if ((remote == (const app_mesh_remote_key_t *)0) ||
+	    (out == (uint8_t *)0) ||
+	    (APP_MeshLogicIsValidFlags(flags) == 0U))
+	{
+		return 0U;
+	}
 
 	memset(&beacon, 0, sizeof(beacon));
 	beacon.network_id = remote->address;
 	beacon.seq = remote->count;
 	beacon.cmd = APP_MESH_REMOTE_RELAY_CMD;
-	beacon.flags = 0x03U;
+	beacon.flags = flags;
 	beacon.payload[0] = remote->count;
 	beacon.payload[1] = remote->cmd;
 	beacon.payload[2] = remote->cmd_type;
 	beacon.payload[3] = 1U;
 	beacon.payload[4] = remote->para;
 	APP_MeshLogicEncodeBeacon(&beacon, out);
+	return 1U;
 }
 
 static uint8_t APP_MeshLogicRemoteKeyEqual(const app_mesh_remote_key_t *left,
